@@ -21,6 +21,53 @@
 
 注意：Auto 预设的沙箱是 `danger-full-access`，由审查模型代替人工逐次把关；每次工具调用会额外产生两次模型请求。
 
+## 计划审查与完成度检查
+
+v0.3.0 新增一种与逐次调用审查并存的工作流：不再对每一次工具调用把关，而是审查**计划**和**完成度**。
+
+1. **自动进入 plan mode**（`planReview.autoPlanMode`）：每个新的顶层会话（子 Agent 除外）自动进入 plan mode。Agent 先做只读调查，再用 `exit_plan_mode` 提交计划；回合结束后（无论走完还是中断）都会自动回到 plan mode。因此 `/plan off` 只对当前请求生效。
+2. **双模型计划审查**（`planReview.enabled`）：Agent 提交计划时，两个审查模型并行审查，主要任务是**补充计划的漏洞**——遗漏的步骤、验证、备份/回滚、未覆盖的请求部分等。两者都 `approve` 就自动批准并退出 plan mode，不再问人；批准消息会列出所有审查补充项，要求 Agent 执行时一并完成并逐项验证。任一 `revise` 则把阻断问题和补充项回给 Agent，让它继续只读调查并修订计划；最多 `maxRevisions` 轮（0–5，缺省 2），超过后交给人审批。审查调用失败时同样交给人审批，不计轮数。
+3. **完成度检查**（`completionCheck.enabled`）：执行结束、回合即将关闭时，两个审查模型对照用户请求、批准的计划、审查补充项和当前回合的工具调用与结果，检查任务是否真正完成（只有工具结果证实了的步骤才算完成）。只要有一个人认为未完成，就把遗漏项回给 Agent 并让同一回合**自动续做一次**；这次续做结束后不再检查。
+
+### 配置
+
+```yaml
+- id: dual-review
+  config:
+    reviewers: [...]            # 同上，两个审查模型共用
+    defaultForNewSessions: false
+    planReview:
+      enabled: false            # 计划审查总开关
+      autoPlanMode: true        # 每个新请求自动进入 plan mode
+      maxRevisions: 2           # 审查要求修改的最多轮数，超过后交给人工审批
+    completionCheck:
+      enabled: false            # 完成度检查
+```
+
+两项功能都要求恰好有两个有效 reviewer；不满足时不启用并记一条 warning。计划审查还要求 DSH 里组合了 plan-mode 插件。
+
+### 启用 plan-mode
+
+plan mode 由 DSH 的 `plan-mode` 插件提供；web profile 里它默认 `disabled: true`，需要在 patch 里改成 `disabled: false` 并提供完整的 `section`（plan 阶段追加给 Agent 的提示词），例如：
+
+```yaml
+- id: plan-mode
+  disabled: false
+  config:
+    section: "调查阶段只读。先完成只读调查，再用 exit_plan_mode 提交计划。"
+```
+
+注意：plan 阶段的“只读”依赖提示词约束，plan mode 本身不拦截工具；真正的执行拦截仍由权限预设负责。
+
+### 人工兜底
+
+以下情况会交给人审批（网页或对应渠道弹出计划确认）：
+
+- 审查要求修改的轮数达到 `maxRevisions`；
+- 任一审查模型调用失败（HTTP 错误、超时、输出不合协议）。
+
+如果计划审查通过但完成度检查发现任务未完成，Agent 自动续做一次后即使仍未完成也不会再问模型，只会把原因写进它自己的最终结论。
+
 ## 兼容性
 
 - DSH `0.2.1-rc.5`（peer 依赖按该版本锁定），Node.js ≥ 24.9。
@@ -94,7 +141,7 @@ npm run check   # 语法检查
 npm test        # 端到端测试，需要 PATH 中有 dsh 0.2.1-rc.5、pnpm 11 和 Node.js ≥ 24.9
 ```
 
-端到端测试会把插件打包装进一个临时的 DSH headless profile，用一个脚本化的 OpenAI 兼容服务扮演 Agent 和两个审查模型，覆盖五种情况：两个 allow、两个 deny、意见不一致、一个审查失败、未配置审查模型。GitHub Actions 在每次推送时运行这套测试。
+端到端测试会把插件打包装进一个临时的 DSH headless profile，用一个脚本化的 OpenAI 兼容服务扮演 Agent 和两个审查模型，覆盖逐次调用审查的五种情况（两个 allow、两个 deny、意见不一致、一个审查失败、未配置审查模型），以及计划审查与完成度检查的五种情况（批准、检查未通过触发自动续做、检查失败、两轮 revise 后人工兜底、审查失败人工兜底）。GitHub Actions 在每次推送时运行这套测试。
 
 发布新版本：修改 `package.json` 的 `version`，提交后推送同名标签（如 `v0.1.1`）。Actions 跑完测试后会打包并创建对应的 Release。
 

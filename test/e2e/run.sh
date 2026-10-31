@@ -54,5 +54,37 @@ scenario no-reviewer ""          ""           yes 0 ""
 scenario routed-both-allow allow-model allow2-model yes 2 ""                  test.routed.cordis.yml
 scenario routed-split      allow-model deny-model   no  2 "requires approval" test.routed.cordis.yml
 
+# plan_scenario NAME R1 R2 EXPECT_MARKER EXPECT_PLAN EXPECT_COMPLETION EXPECT_STEERED
+# The same flow with the plan-review / completion-check workflow: counts the
+# plan reviews, completion checks and steer replies in the mock log.
+plan_scenario() {
+  name=$1; expect_marker=$4; expect_plan=$5; expect_completion=$6; expect_steered=$7
+  rm -f "$MARKER"; : >"$MOCK_LOG"
+  echo "please run the shell command" | R1=$2 R2=$3 timeout 120 \
+    dsh --profile headless --patch "$fixtures/test.plan.cordis.yml" --json - >"$work/$name.jsonl" 2>"$work/$name.err"
+  marker=no; [ -f "$MARKER" ] && marker=yes
+  plan=$(grep -c '"kind":"plan"' "$MOCK_LOG")
+  completion=$(grep -c '"kind":"completion"' "$MOCK_LOG")
+  steered=$(grep -c '"steered":true' "$MOCK_LOG")
+  # Every plan review and completion check must see the current turn.
+  empty=$(grep -E '"kind":"(plan|completion)"' "$MOCK_LOG" | grep -c -v '"currentTurn":[1-9]')
+  if [ "$marker" = "$expect_marker" ] && [ "$plan" = "$expect_plan" ] && [ "$empty" = 0 ] \
+     && [ "$completion" = "$expect_completion" ] && [ "$steered" = "$expect_steered" ]; then
+    echo "ok   $name (ran=$marker plan=$plan completion=$completion steered=$steered)"
+  else
+    echo "FAIL $name: ran=$marker (want $expect_marker) plan=$plan (want $expect_plan) completion=$completion (want $expect_completion) steered=$steered (want $expect_steered) empty-transcripts=$empty (want 0)"
+    tail -n 5 "$work/$name.err" | sed "s/^/       /"
+    failures=$((failures + 1))
+  fi
+}
+
+plan_scenario plan-approved          ok-model ok2-model      yes 2 2 0
+plan_scenario plan-incomplete        ok-model incomplete-model yes 2 2 1
+plan_scenario plan-completion-failed ok-model donefail-model yes 2 2 0
+plan_scenario plan-revise            ok-model revise-model   no  4 0 0
+# A failed review falls back to a human without using up a revision round, so
+# each of the mock's three submissions is reviewed again: 3 x 2 requests.
+plan_scenario plan-review-failed     ok-model planfail-model no  6 0 0
+
 [ "$failures" -eq 0 ] && echo "all scenarios passed" || echo "$failures scenario(s) failed"
 exit "$failures"

@@ -1,7 +1,7 @@
 {
   "name": "dsh-dual-review",
-  "description": "Dual-model per-tool LLM authorization review for the DeepSeek Harness Auto permission preset",
-  "version": "0.2.0",
+  "description": "Dual-model review for DeepSeek Harness: plan review with gap filling, a completion check, and per-tool Auto authorization",
+  "version": "0.3.0",
   "type": "module",
   "main": "lib/index.js",
   "license": "MIT",

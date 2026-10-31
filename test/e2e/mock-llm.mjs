@@ -1,8 +1,13 @@
 // Scripted OpenAI-compatible endpoint for the end-to-end test.
-// The agent model always asks to run one shell command that writes $MARKER;
-// reviewer requests (system prompt starting with REVIEW_POLICY) are answered
-// by model id: allow-model / allow2-model allow, deny-model denies, and
-// fail-model returns HTTP 500. Every request is logged to $MOCK_LOG.
+// The agent model asks to run one shell command that writes $MARKER (or, in
+// plan mode, calls exit_plan_mode). Reviewer requests are told apart by the
+// first line of their system prompt and logged with a kind field:
+// REVIEW_POLICY -> "call", PLAN_REVIEW_POLICY -> "plan",
+// COMPLETION_POLICY -> "completion"; everything else is "agent". Reviewer
+// replies depend on the model id: allow-model / allow2-model allow,
+// deny-model denies, revise-model asks for plan revisions, incomplete-model
+// reports the task unfinished, and fail-/planfail-/donefail-model return
+// HTTP 500. Every request is logged to $MOCK_LOG.
 import fs from 'node:fs';
 import http from 'node:http';
 
@@ -16,6 +21,24 @@ const verdicts = {
   'allow-model': { risk: 'low', decision: 'allow' },
   'allow2-model': { risk: 'medium', decision: 'allow' },
   'deny-model': { risk: 'high', decision: 'deny', reason: 'test deny' },
+};
+const planVerdicts = (model) => model.includes('planfail') ? null
+  : model.includes('revise') ? { verdict: 'revise', blockers: ['测试阻断'], additions: [] }
+  : { verdict: 'approve', blockers: [], additions: ['执行后确认 marker 文件存在'] };
+const completionVerdicts = (model) => model.includes('donefail') ? null
+  : model.includes('incomplete') ? { complete: false, missing: ['再次确认 marker 文件'] }
+  : { complete: true };
+const fail500 = (res, model) => {
+  res.writeHead(500, { 'content-type': 'application/json' });
+  res.end('{"error":{"message":"mock failure"}}');
+};
+const callOut = (messages) => {
+  let calls = 0;
+  for (const m of messages) {
+    if (m.role !== 'assistant') continue;
+    for (const call of m.tool_calls ?? []) if (call.function?.name === 'exit_plan_mode') calls += 1;
+  }
+  return calls;
 };
 const chunk = (model, delta, finish = null) => ({ id: 'mock', object: 'chat.completion.chunk', created: 0, model, choices: [{ index: 0, delta, finish_reason: finish }] });
 const usage = (model) => ({ id: 'mock', object: 'chat.completion.chunk', created: 0, model, choices: [], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } });
@@ -54,23 +77,55 @@ http.createServer((req, res) => {
     const { model } = request;
     const messages = request.messages ?? [];
     const system = messages.find((m) => m.role === 'system' || m.role === 'developer');
-    const isReview = textOf(system).startsWith('REVIEW_POLICY');
+    const systemText = textOf(system);
+    const firstLine = systemText.split('\n', 1)[0] ?? '';
+    const kind = firstLine === 'REVIEW_POLICY' ? 'call'
+      : firstLine === 'PLAN_REVIEW_POLICY' ? 'plan'
+      : firstLine === 'COMPLETION_POLICY' ? 'completion'
+      : 'agent';
+    const isReview = kind !== 'agent';
     const tools = request.tools ?? [];
     const names = tools.map((t) => t.function?.name ?? t.name);
-    log({ model, isReview });
+    // For plan reviews and completion checks, record how many entries the
+    // CURRENT_TURN section carried, so the test can catch an empty transcript.
+    const sections = textOf(messages.find((m) => m.role === 'user')).split('\n\n');
+    const turnAt = sections.indexOf('CURRENT_TURN');
+    const currentTurn = turnAt < 0 ? undefined : JSON.parse(sections[turnAt + 1]).length;
+    log({ model, isReview, kind, ...(kind === 'plan' || kind === 'completion' ? { currentTurn } : {}) });
 
     if (isReview) {
-      if (model === 'fail-model') {
-        res.writeHead(500, { 'content-type': 'application/json' });
-        res.end('{"error":{"message":"mock failure"}}');
+      const content = kind === 'plan' ? planVerdicts(model)
+        : kind === 'completion' ? completionVerdicts(model)
+        : model === 'fail-model' ? null
+        : verdicts[model] ?? verdicts['allow-model'];
+      if (content === null) {
+        fail500(res, model);
         return;
       }
-      const content = JSON.stringify(verdicts[model] ?? verdicts['allow-model']);
-      if (request.stream === true) reply(res, model, content);
-      else replyOnce(res, model, content);
+      const text = JSON.stringify(content);
+      if (request.stream === true) reply(res, model, text);
+      else replyOnce(res, model, text);
       return;
     }
-    if (messages.at(-1)?.role === 'tool' || names.length === 0) {
+    if (systemText.includes('PLAN_MODE_ACTIVE') && names.includes('exit_plan_mode')) {
+      if (callOut(messages) >= 3) {
+        reply(res, model, 'gave up');
+        return;
+      }
+      stream(res, [
+        chunk(model, { role: 'assistant', tool_calls: [{ index: 0, id: `call_${Date.now()}`, type: 'function', function: { name: 'exit_plan_mode', arguments: JSON.stringify({ plan: '# Test plan\n\n1. Write the marker file.' }) } }] }),
+        chunk(model, {}, 'tool_calls'),
+        usage(model),
+      ]);
+      return;
+    }
+    const last = messages.at(-1);
+    if (last?.role === 'user' && textOf(last).includes('双模型完成度检查')) {
+      log({ steered: true });
+      reply(res, model, 'done again');
+      return;
+    }
+    if (last?.role === 'tool' || names.length === 0) {
       reply(res, model, 'done');
       return;
     }

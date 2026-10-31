@@ -4,3 +4,9 @@
       config:
         reviewers: []
         defaultForNewSessions: false
+        planReview:
+          enabled: false
+          autoPlanMode: true
+          maxRevisions: 2
+        completionCheck:
+          enabled: false
