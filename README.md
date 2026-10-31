@@ -28,11 +28,13 @@
 
 ## 安装
 
+从 GitHub Release 安装打包好的 tarball：
+
 ```sh
-dsh plugin --profile web add github:ckyasb/dsh-dual-review#v0.1.0
+dsh plugin --profile web add https://github.com/ckyasb/dsh-dual-review/releases/download/v0.1.0/dsh-dual-review-0.1.0.tgz
 ```
 
-安装后需要重启 DSH。
+安装后需要重启 DSH。不建议用 `github:ckyasb/dsh-dual-review` 这种写法：pnpm 会把它当作 git 依赖，需要运行环境里有 git，还会要求放行构建脚本。
 
 ## 配置
 
@@ -84,6 +86,8 @@ npm test        # 端到端测试，需要 PATH 中有 dsh 0.2.1-rc.5、pnpm 11 
 ```
 
 端到端测试会把插件打包装进一个临时的 DSH headless profile，用一个脚本化的 OpenAI 兼容服务扮演 Agent 和两个审查模型，覆盖五种情况：两个 allow、两个 deny、意见不一致、一个审查失败、未配置审查模型。GitHub Actions 在每次推送时运行这套测试。
+
+发布新版本：修改 `package.json` 的 `version`，提交后推送同名标签（如 `v0.1.1`）。Actions 跑完测试后会打包并创建对应的 Release。
 
 ## 来源
 
