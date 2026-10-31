@@ -1,0 +1,6 @@
+- insert:
+    - id: dual-review
+      name: 'dsh-dual-review'
+      config:
+        reviewers: []
+        defaultForNewSessions: false
