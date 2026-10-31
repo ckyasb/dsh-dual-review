@@ -38,45 +38,54 @@ dsh plugin --profile web add https://github.com/ckyasb/dsh-dual-review/releases/
 
 ## 配置
 
-1. 在 `llm-pi-ai` 中为两个审查模型各配一条 provider 路由（OpenAI 兼容接口为例，key 通过环境变量提供）：
+推荐用**直连模式**：插件直接调用审查模型的 OpenAI 兼容 `chat/completions` 接口，审查模型不经过 DSH 的 provider 路由，因此**不会出现在 DSH 的模型目录里**，Agent 也就无法在网页模型选择器、钉钉 `/model` 或子 agent 中选用它们。
 
-   ```yaml
-   - id: llm-pi-ai
-     config:
-       providers:
-         review-gpt:
-           displayName: GPT reviewer
-           api: openai-completions
-           baseURL: https://example.com/v1
-           apiKeyEnv: REVIEW_GPT_API_KEY
-           models:
-             - { id: <model-id>, name: GPT reviewer }
-         review-deepseek:
-           displayName: DeepSeek Flash reviewer
-           api: openai-completions
-           baseURL: https://api.deepseek.com/v1
-           apiKeyEnv: REVIEW_DEEPSEEK_API_KEY
-           models:
-             - { id: <model-id>, name: DeepSeek Flash reviewer }
-   ```
-
-   注意：patch 会整体替换该行的 `config`，已有的 provider 路由也要一并写上。
-
-2. 配置插件（profile 的 `cordis.patch.yml` 或 `dsh --patch` 叠加文件）：
+1. 配置插件（profile 的 `cordis.patch.yml` 或 `dsh --patch` 叠加文件）：
 
    ```yaml
    - id: dual-review
      config:
        defaultForNewSessions: true
        reviewers:
-         - { name: GPT, provider: review-gpt, model: <model-id> }
-         - { name: DeepSeek Flash, provider: review-deepseek, model: <model-id> }
+         - { name: GPT, baseURL: https://example.com/v1, apiKeyEnv: REVIEW_GPT_API_KEY, model: <model-id> }
+         - { name: DeepSeek Flash, baseURL: https://api.deepseek.com/v1, apiKeyEnv: REVIEW_DEEPSEEK_API_KEY, model: <model-id> }
    ```
 
    | 字段 | 说明 |
    |---|---|
-   | `reviewers` | 取前两个 `provider`、`model` 都非空的条目；`name` 可省略（缺省 `reviewer-1` / `reviewer-2`）；`temperature` 缺省 0，设为 `null` 时请求不带 temperature |
+   | `reviewers` | 取前两个有效条目（直连与路由模式可以混用）；`name` 可省略（缺省 `reviewer-1` / `reviewer-2`）；`temperature` 缺省 0，设为 `null` 时请求不带 temperature |
+   | `baseURL` | 直连模式的 OpenAI 兼容接口地址；非空时该条按直连模式处理 |
+   | `apiKeyEnv` | 存放 API key 的环境变量名（直连模式必填） |
+   | `model` / `timeoutMs` | 直连模式的模型 id（必填）与请求超时毫秒数（缺省 120000） |
    | `defaultForNewSessions` | 为 `true` 且两个审查模型都已配置时，全新顶层会话默认进入 Auto |
+
+   注意：DSH 会从 Agent 的 shell 环境中过滤名字含 `KEY` / `TOKEN` / `SECRET` / `PASSWORD` 的变量，所以 key 的环境变量名应包含 `KEY`（如上例），这样 Agent 的 shell 命令默认看不到它。这不是完全隔离：Auto 预设下 Agent 与 DSH 是同一用户、沙箱为完全访问，仍可能通过读取进程信息拿到 key；需要彻底隔离时应把审查放到独立的服务里。
+
+2. 设置两个环境变量（如 `REVIEW_GPT_API_KEY`、`REVIEW_DEEPSEEK_API_KEY`）后重启 DSH。
+
+### 路由模式（兼容）
+
+旧配置仍可用：把审查模型注册成 DSH `llm-pi-ai` 的一条 provider 路由（OpenAI 兼容接口为例，key 通过环境变量提供），再在插件配置里用 `provider` + `model` 引用：
+
+   ```yaml
+   # llm-pi-ai 的 providers：
+   review-gpt:
+     displayName: GPT reviewer
+     api: openai-completions
+     baseURL: https://example.com/v1
+     apiKeyEnv: REVIEW_GPT_API_KEY
+     models:
+       - { id: <model-id>, name: GPT reviewer }
+   ```
+
+   ```yaml
+   - id: dual-review
+     config:
+       reviewers:
+         - { name: GPT, provider: review-gpt, model: <model-id> }
+   ```
+
+   注意：patch 会整体替换该行的 `config`，已有的 provider 路由也要一并写上。这种方式下审查模型会进入 DSH 的模型目录，Agent 可以选用；建议改用直连模式。
 
 ## 开发与测试
 

@@ -32,6 +32,15 @@ function reply(res, model, content) {
   stream(res, [chunk(model, { role: 'assistant', content }), chunk(model, {}, 'stop'), usage(model)]);
 }
 
+function replyOnce(res, model, content) {
+  res.writeHead(200, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({
+    id: 'mock', object: 'chat.completion', created: 0, model,
+    choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+  }));
+}
+
 http.createServer((req, res) => {
   let body = '';
   req.on('data', (data) => { body += data; });
@@ -56,7 +65,9 @@ http.createServer((req, res) => {
         res.end('{"error":{"message":"mock failure"}}');
         return;
       }
-      reply(res, model, JSON.stringify(verdicts[model] ?? verdicts['allow-model']));
+      const content = JSON.stringify(verdicts[model] ?? verdicts['allow-model']);
+      if (request.stream === true) reply(res, model, content);
+      else replyOnce(res, model, content);
       return;
     }
     if (messages.at(-1)?.role === 'tool' || names.length === 0) {

@@ -1,0 +1,36 @@
+# Overlay for the routing-mode scenarios: the reviewers are DSH provider
+# routes (reviewmock) referenced by provider + model instead of baseURL.
+- id: llm-pi-ai
+  config:
+    providers:
+      mock:
+        displayName: Mock agent
+        api: openai-completions
+        baseURL: !!js "'http://127.0.0.1:' + (process.env.MOCK_PORT ?? '18080') + '/v1'"
+        apiKeyEnv: MOCK_API_KEY
+        models:
+          - { id: main-model, name: main }
+      reviewmock:
+        displayName: Mock reviewers
+        api: openai-completions
+        baseURL: !!js "'http://127.0.0.1:' + (process.env.MOCK_PORT ?? '18080') + '/v1'"
+        apiKeyEnv: MOCK_API_KEY
+        models:
+          - { id: allow-model, name: allow }
+          - { id: allow2-model, name: allow2 }
+          - { id: deny-model, name: deny }
+          - { id: fail-model, name: fail }
+- id: agent-default-model
+  config:
+    provider: mock
+    model: main-model
+- id: dual-review
+  config:
+    defaultForNewSessions: true
+    reviewers:
+      - name: R1
+        provider: reviewmock
+        model: !!js process.env.R1 ?? ''
+      - name: R2
+        provider: reviewmock
+        model: !!js process.env.R2 ?? ''

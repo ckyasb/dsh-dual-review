@@ -24,12 +24,12 @@ mock_pid=$!
 sleep 1
 
 failures=0
-# scenario NAME R1 R2 EXPECTED_MARKER EXPECTED_REVIEWS EXPECTED_RESULT_SUBSTRING
+# scenario NAME R1 R2 EXPECTED_MARKER EXPECTED_REVIEWS EXPECTED_RESULT_SUBSTRING [OVERLAY]
 scenario() {
-  name=$1; expect_marker=$4; expect_reviews=$5; expect_result=$6
+  name=$1; expect_marker=$4; expect_reviews=$5; expect_result=$6; overlay=${7:-test.cordis.yml}
   rm -f "$MARKER"; : >"$MOCK_LOG"
   echo "please run the shell command" | R1=$2 R2=$3 timeout 120 \
-    dsh --profile headless --patch "$fixtures/test.cordis.yml" --json - >"$work/$name.jsonl" 2>"$work/$name.err"
+    dsh --profile headless --patch "$fixtures/$overlay" --json - >"$work/$name.jsonl" 2>"$work/$name.err"
   marker=no; [ -f "$MARKER" ] && marker=yes
   reviews=$(grep -c '"isReview":true' "$MOCK_LOG")
   result=$(node -e '
@@ -50,6 +50,9 @@ scenario both-deny   deny-model  deny-model   no  2 "Auto review rejected tool"
 scenario split       allow-model deny-model   no  2 "requires approval"
 scenario one-failed  allow-model fail-model   no  2 "requires approval"
 scenario no-reviewer ""          ""           yes 0 ""
+# The same checks with the reviewers as DSH provider routes.
+scenario routed-both-allow allow-model allow2-model yes 2 ""                  test.routed.cordis.yml
+scenario routed-split      allow-model deny-model   no  2 "requires approval" test.routed.cordis.yml
 
 [ "$failures" -eq 0 ] && echo "all scenarios passed" || echo "$failures scenario(s) failed"
 exit "$failures"
