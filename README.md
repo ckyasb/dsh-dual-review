@@ -68,6 +68,61 @@ plan mode 由 DSH 的 `plan-mode` 插件提供；web profile 里它默认 `disab
 
 如果计划审查通过但完成度检查发现任务未完成，Agent 自动续做一次后即使仍未完成也不会再问模型，只会把原因写进它自己的最终结论。
 
+## 风险闸门
+
+v0.4.0 新增第三种与前面两种互相独立、可同时存在的工作流：**只审查有风险的工具调用**。它为 [dsh-superagent](https://github.com/ckyasb/dsh-superagent) 这类没有 plan mode、用自己的预设（如 `danger-full-access`）直接执行任务的执行器设计：从钉钉群和 GitLab 接任务，既改 argo-cd 仓库，也直接做运维操作（kubectl、ssh、MCP）。要求是：**能影响集群或服务器的调用，先由两个审查模型审查，都通过就自动执行；只读和本地操作不审查。**
+
+### 判定规则
+
+每次工具调用前（子 Agent 会话同样生效），按部署方的正则判定是否有风险：
+
+- 工具名是 `bash`（shell 类）且 `arguments.command` 全文被 `riskGate.commands` 任一正则匹配（按多行模式 `m` 测试）；或
+- 工具名被 `riskGate.tools` 任一正则匹配。
+
+不匹配的调用直接放行，不产生任何审查请求。三种跳过情形：会话未挂接 Agent、外层 `run_code` 调用、当前会话已在 Auto 预设（那时逐次审查已经负责，避免重复审查）。
+
+### 审查与合并规则
+
+判定有风险的调用会构建审查输入（对话与当前回合记录，再加一节 `PENDING_ACTION`，即本次工具名与参数的 JSON，超过 4000 字符截断），用固定的风险审查提示词并行调用两个审查模型。合并：
+
+| 两个审查结果 | 处理 |
+|---|---|
+| 都 `allow` | 执行 |
+| 任一 `deny`、任一审查调用失败或输出不合协议 | 拦下，不执行（`RISK_GATE_DENIED`），理由中列出两个模型各自的通过 / 拒绝 / 失败情况 |
+
+审查是**失败关闭**的：只要不是两个明确的 `allow`，一律不执行。审查期间会话中止则取消这次调用。每次审查记一行 info 日志（工具名和两个模型的 allow / deny / failed），不记录参数和理由。
+
+### 被拒之后 Agent 应该怎么做
+
+被拦下时 Agent 收到的提示要求它：**换一种更安全、范围更小的做法；如果确实需要这样做，先向请求人说明要做的操作和影响，得到明确同意后再执行**——也就是回到请求人（钉钉群里的人）确认，而不是自行重试同样的操作。
+
+### 配置
+
+```yaml
+- id: dual-review
+  config:
+    riskGate:
+      enabled: false            # 风险闸门总开关
+      commands: []              # 正则字符串数组：对 bash 的 command 全文测试（flags 'm'）
+      tools: []                 # 正则字符串数组：对工具名测试
+```
+
+与另两种模式一样要求恰好有两个有效 reviewer，不满足时记一条 warning 并不启用。无效正则在启动时记 warning 并忽略该条，不影响插件加载。正则是**部署方的策略**，请按自己的集群和服务器实际情况调整。
+
+示例配置（kubectl 非只读子命令、helm 变更类子命令、ssh / scp / rsync、带写方法的 curl，以及 kubernetes MCP 的写操作）：
+
+```yaml
+    riskGate:
+      enabled: true
+      commands:
+        - '^kubectl\s+(apply|create|delete|edit|patch|replace|scale|rollout|cordon|drain|taint|label|annotate|set)\b'
+        - '^helm\s+(install|upgrade|uninstall|rollback)\b'
+        - '^(ssh|scp|rsync)\s'
+        - 'curl\s+[^|]*-X\s*(POST|PUT|PATCH|DELETE)\b'
+      tools:
+        - '^mcp__kubernetes__.*(delete|create|update|patch|scale|exec|apply|run)'
+```
+
 ## 兼容性
 
 - DSH `0.2.1-rc.5`（peer 依赖按该版本锁定），Node.js ≥ 24.9。

@@ -1,0 +1,30 @@
+# Overlay for the risk-gate scenarios: the same mock provider and
+# direct-mode reviewers as test.cordis.yml, but sessions do not default to
+# Auto and the risk gate is on, matching any command mentioning the marker.
+- id: llm-pi-ai
+  config:
+    providers:
+      mock:
+        displayName: Mock agent
+        api: openai-completions
+        baseURL: !!js "'http://127.0.0.1:' + (process.env.MOCK_PORT ?? '18080') + '/v1'"
+        apiKeyEnv: MOCK_API_KEY
+        models:
+          - { id: main-model, name: main }
+- id: agent-default-model
+  config:
+    provider: mock
+    model: main-model
+- id: dual-review
+  config:
+    defaultForNewSessions: false
+    riskGate: { enabled: true, commands: ['dual-review-ran'], tools: [] }
+    reviewers:
+      - name: R1
+        baseURL: !!js "'http://127.0.0.1:' + (process.env.MOCK_PORT ?? '18080') + '/v1'"
+        apiKeyEnv: MOCK_API_KEY
+        model: !!js process.env.R1 ?? ''
+      - name: R2
+        baseURL: !!js "'http://127.0.0.1:' + (process.env.MOCK_PORT ?? '18080') + '/v1'"
+        apiKeyEnv: MOCK_API_KEY
+        model: !!js process.env.R2 ?? ''

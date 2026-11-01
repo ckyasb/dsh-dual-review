@@ -10,3 +10,7 @@
           maxRevisions: 2
         completionCheck:
           enabled: false
+        riskGate:
+          enabled: false
+          commands: []
+          tools: []

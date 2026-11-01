@@ -3,7 +3,8 @@
 // plan mode, calls exit_plan_mode). Reviewer requests are told apart by the
 // first line of their system prompt and logged with a kind field:
 // REVIEW_POLICY -> "call", PLAN_REVIEW_POLICY -> "plan",
-// COMPLETION_POLICY -> "completion"; everything else is "agent". Reviewer
+// COMPLETION_POLICY -> "completion", RISK_REVIEW_POLICY -> "risk";
+// everything else is "agent". Reviewer
 // replies depend on the model id: allow-model / allow2-model allow,
 // deny-model denies, revise-model asks for plan revisions, incomplete-model
 // reports the task unfinished, and fail-/planfail-/donefail-model return
@@ -28,6 +29,9 @@ const planVerdicts = (model) => model.includes('planfail') ? null
 const completionVerdicts = (model) => model.includes('donefail') ? null
   : model.includes('incomplete') ? { complete: false, missing: ['再次确认 marker 文件'] }
   : { complete: true };
+const riskVerdicts = (model) => model.includes('riskfail') ? null
+  : model.includes('riskdeny') ? { decision: 'deny', reason: '测试拒绝' }
+  : { decision: 'allow' };
 const fail500 = (res, model) => {
   res.writeHead(500, { 'content-type': 'application/json' });
   res.end('{"error":{"message":"mock failure"}}');
@@ -82,6 +86,7 @@ http.createServer((req, res) => {
     const kind = firstLine === 'REVIEW_POLICY' ? 'call'
       : firstLine === 'PLAN_REVIEW_POLICY' ? 'plan'
       : firstLine === 'COMPLETION_POLICY' ? 'completion'
+      : firstLine === 'RISK_REVIEW_POLICY' ? 'risk'
       : 'agent';
     const isReview = kind !== 'agent';
     const tools = request.tools ?? [];
@@ -94,7 +99,8 @@ http.createServer((req, res) => {
     log({ model, isReview, kind, ...(kind === 'plan' || kind === 'completion' ? { currentTurn } : {}) });
 
     if (isReview) {
-      const content = kind === 'plan' ? planVerdicts(model)
+      const content = kind === 'risk' ? riskVerdicts(model)
+        : kind === 'plan' ? planVerdicts(model)
         : kind === 'completion' ? completionVerdicts(model)
         : model === 'fail-model' ? null
         : verdicts[model] ?? verdicts['allow-model'];

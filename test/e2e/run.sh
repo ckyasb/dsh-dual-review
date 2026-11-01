@@ -86,5 +86,29 @@ plan_scenario plan-revise            ok-model revise-model   no  4 0 0
 # each of the mock's three submissions is reviewed again: 3 x 2 requests.
 plan_scenario plan-review-failed     ok-model planfail-model no  6 0 0
 
+# risk_scenario NAME R1 R2 OVERLAY EXPECT_MARKER EXPECT_RISK_REVIEWS
+# The risk-gate flow on non-Auto sessions: counts the risk reviews in the
+# mock log and whether the marker-writing command actually ran.
+risk_scenario() {
+  name=$1; overlay=$4; expect_marker=$5; expect_risk=$6
+  rm -f "$MARKER"; : >"$MOCK_LOG"
+  echo "please run the shell command" | R1=$2 R2=$3 timeout 120 \
+    dsh --profile headless --patch "$fixtures/$overlay" --json - >"$work/$name.jsonl" 2>"$work/$name.err"
+  marker=no; [ -f "$MARKER" ] && marker=yes
+  risk=$(grep -c '"kind":"risk"' "$MOCK_LOG")
+  if [ "$marker" = "$expect_marker" ] && [ "$risk" = "$expect_risk" ]; then
+    echo "ok   $name (ran=$marker risk=$risk)"
+  else
+    echo "FAIL $name: ran=$marker (want $expect_marker) risk=$risk (want $expect_risk)"
+    tail -n 5 "$work/$name.err" | sed "s/^/       /"
+    failures=$((failures + 1))
+  fi
+}
+
+risk_scenario risk-allow       ok-model ok2-model       test.risk.cordis.yml       yes 2
+risk_scenario risk-deny        ok-model riskdeny-model  test.risk.cordis.yml       no  2
+risk_scenario risk-failed      ok-model riskfail-model  test.risk.cordis.yml       no  2
+risk_scenario risk-not-matched ok-model riskdeny-model  test.risk-miss.cordis.yml  yes 0
+
 [ "$failures" -eq 0 ] && echo "all scenarios passed" || echo "$failures scenario(s) failed"
 exit "$failures"

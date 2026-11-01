@@ -1,0 +1,29 @@
+# Overlay for the risk-gate miss scenario: identical to test.risk.cordis.yml
+# except the command pattern never matches the marker-writing test command.
+- id: llm-pi-ai
+  config:
+    providers:
+      mock:
+        displayName: Mock agent
+        api: openai-completions
+        baseURL: !!js "'http://127.0.0.1:' + (process.env.MOCK_PORT ?? '18080') + '/v1'"
+        apiKeyEnv: MOCK_API_KEY
+        models:
+          - { id: main-model, name: main }
+- id: agent-default-model
+  config:
+    provider: mock
+    model: main-model
+- id: dual-review
+  config:
+    defaultForNewSessions: false
+    riskGate: { enabled: true, commands: ['^kubectl\s+delete'], tools: [] }
+    reviewers:
+      - name: R1
+        baseURL: !!js "'http://127.0.0.1:' + (process.env.MOCK_PORT ?? '18080') + '/v1'"
+        apiKeyEnv: MOCK_API_KEY
+        model: !!js process.env.R1 ?? ''
+      - name: R2
+        baseURL: !!js "'http://127.0.0.1:' + (process.env.MOCK_PORT ?? '18080') + '/v1'"
+        apiKeyEnv: MOCK_API_KEY
+        model: !!js process.env.R2 ?? ''
