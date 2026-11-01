@@ -40,15 +40,19 @@ v0.3.0 新增一种与逐次调用审查并存的工作流：不再对每一次�
       enabled: false            # 计划审查总开关
       autoPlanMode: true        # 每个新请求自动进入 plan mode
       maxRevisions: 2           # 审查要求修改的最多轮数，超过后交给人工审批
+      skipPresets: []           # 这些预设的会话不自动进入 plan mode、不做计划审查和完成度检查
+      reportFallbackPresets: [] # 这些预设的会话需要人工时，不弹 DSH 的计划审批问题，而是让 agent 自己去问
     completionCheck:
       enabled: false            # 完成度检查
 ```
 
 两项功能都要求恰好有两个有效 reviewer；不满足时不启用并记一条 warning。计划审查还要求 DSH 里组合了 plan-mode 插件。
 
+`skipPresets` 和 `reportFallbackPresets` 都是预设 id 的字符串数组（非法项忽略）。会话的预设取 DSH 的 `agentPreset` 会话投影（预设注册表最后一次为它选择的预设），取不到再用创建时的 `session.header.agentPreset`；没有预设注册表的 profile（如 headless）里会话没有预设，这两项不起作用。`skipPresets` 里的预设（例如 [dsh-superagent](https://github.com/ckyasb/dsh-superagent) 只做路由、不能进计划模式的 `dsh-superagent-router`）完全不走计划审查流程；`reportFallbackPresets` 里的预设（例如不被人打开、DSH 的计划审批问题没人能回答的执行器 `dsh-superagent-worker`）在审查没通过时改为让 agent 通过自己的渠道（如 `orchestrator_report` 的 `human_action`）去问请求人。
+
 ### 启用 plan-mode
 
-plan mode 由 DSH 的 `plan-mode` 插件提供；web profile 里它默认 `disabled: true`，需要在 patch 里改成 `disabled: false` 并提供完整的 `section`（plan 阶段追加给 Agent 的提示词），例如：
+plan mode 由 DSH 的 `plan-mode` 插件提供，插件用的是根层 `plan-mode` 行提供的服务。headless 和 web profile 都已组合这一行；如果你的 profile 关掉了它，在 patch 里改成 `disabled: false`。patch 会整体替换这一行的 `config`，要写上完整的 `section`（plan 阶段追加给 Agent 的提示词），例如：
 
 ```yaml
 - id: plan-mode
@@ -57,7 +61,7 @@ plan mode 由 DSH 的 `plan-mode` 插件提供；web profile 里它默认 `disab
     section: "调查阶段只读。先完成只读调查，再用 exit_plan_mode 提交计划。"
 ```
 
-注意：plan 阶段的“只读”依赖提示词约束，plan mode 本身不拦截工具；真正的执行拦截仍由权限预设负责。
+注意：plan 阶段的“只读”依赖提示词约束，plan mode 本身不拦截工具；真正的执行拦截由权限预设负责，或者用风险闸门的 `requirePlan` 模式拒绝计划获批前的有风险调用。
 
 ### 人工兜底
 
@@ -66,11 +70,15 @@ plan mode 由 DSH 的 `plan-mode` 插件提供；web profile 里它默认 `disab
 - 审查要求修改的轮数达到 `maxRevisions`；
 - 任一审查模型调用失败（HTTP 错误、超时、输出不合协议）。
 
+会话的预设在 `planReview.reportFallbackPresets` 里时不走上面的路径：插件不弹 DSH 自带的计划审批问题（执行器没有人在网页里回答），而是直接拒绝这次提交并告诉 agent：计划没有获批、仍处于计划模式，要它把计划要做的操作和影响告诉请求人，请求明确同意（用 agent 自己的渠道，例如 `orchestrator_report` 的 `human_action`），得到同意后再次调用 `exit_plan_mode` 提交计划并在计划里写明请求人已同意。之后（请求人的回复开始的新回合里）它提交的第一份计划按请求人的同意直接批准，不再调用审查模型；在问人的同一回合里重新提交仍会被拒绝，批准也只对这一份计划有效。
+
 如果计划审查通过但完成度检查发现任务未完成，Agent 自动续做一次后即使仍未完成也不会再问模型，只会把原因写进它自己的最终结论。
 
 ## 风险闸门
 
 v0.4.0 新增第三种与前面两种互相独立、可同时存在的工作流：**只审查有风险的工具调用**。它为 [dsh-superagent](https://github.com/ckyasb/dsh-superagent) 这类没有 plan mode、用自己的预设（如 `danger-full-access`）直接执行任务的执行器设计：从钉钉群和 GitLab 接任务，既改 argo-cd 仓库，也直接做运维操作（kubectl、ssh、MCP）。要求是：**能影响集群或服务器的调用，先由两个审查模型审查，都通过就自动执行；只读和本地操作不审查。**
+
+v0.5.0 给它加了第二种模式：`riskGate.mode: requirePlan`。这个模式**不调用审查模型**：有风险的调用如果发生在计划获批之前（会话当前处于 plan mode，或有未处理的进入请求）就直接拒绝并提示 agent 先提交计划，计划获批后（或用户自己关了计划模式）则直接放行、不审查。`mode` 缺省或非法时按 `review`（v0.4 行为）。`requirePlan` 推荐与计划审查一起用：这样审查模型每个任务只被调用两次——计划一次、完成度一次，执行中不再逐条审查。会话的预设在 `planReview.skipPresets` 里时，`requirePlan` 守卫也不作用于它。
 
 ### 判定规则
 
@@ -103,11 +111,12 @@ v0.4.0 新增第三种与前面两种互相独立、可同时存在的工作流�
   config:
     riskGate:
       enabled: false            # 风险闸门总开关
+      mode: review              # review（逐次双模型审查）或 requirePlan（计划获批前直接拒绝，不调审查模型）
       commands: []              # 正则字符串数组：对 bash 的 command 全文测试（flags 'm'）
       tools: []                 # 正则字符串数组：对工具名测试
 ```
 
-与另两种模式一样要求恰好有两个有效 reviewer，不满足时记一条 warning 并不启用。无效正则在启动时记 warning 并忽略该条，不影响插件加载。正则是**部署方的策略**，请按自己的集群和服务器实际情况调整。
+`mode: review` 与另两种模式一样要求恰好有两个有效 reviewer，不满足时记一条 warning 并不启用；`mode: requirePlan` 不调用审查模型，所以没有这个要求。无效正则在启动时记 warning 并忽略该条，不影响插件加载。正则是**部署方的策略**，请按自己的集群和服务器实际情况调整。
 
 示例配置（kubectl 非只读子命令、helm 变更类子命令、ssh / scp / rsync、带写方法的 curl，以及 kubernetes MCP 的写操作）：
 
@@ -121,6 +130,27 @@ v0.4.0 新增第三种与前面两种互相独立、可同时存在的工作流�
         - 'curl\s+[^|]*-X\s*(POST|PUT|PATCH|DELETE)\b'
       tools:
         - '^mcp__kubernetes__.*(delete|create|update|patch|scale|exec|apply|run)'
+```
+
+### dsh-superagent 的示例配置
+
+dsh-superagent 的路由主 Session 用预设 `dsh-superagent-router`（只路由，不能进计划模式），执行器用 `dsh-superagent-worker`（不被人打开，DSH 自带的计划审批问题没人回答）。推荐配置：路由会话完全跳过计划审查流程，执行器需要人工时让 agent 自己去问请求人，风险闸门用 `requirePlan` 模式配合计划审查（每个任务只调用审查模型两次）：
+
+```yaml
+    planReview:
+      enabled: true
+      autoPlanMode: true
+      maxRevisions: 2
+      skipPresets: [dsh-superagent-router]
+      reportFallbackPresets: [dsh-superagent-worker]
+    completionCheck:
+      enabled: true
+    riskGate:
+      enabled: true
+      mode: requirePlan
+      commands:
+        - '^kubectl\s+(apply|create|delete|edit|patch|replace|scale|rollout|cordon|drain|taint|label|annotate|set)\b'
+      tools: []
 ```
 
 ## 兼容性
@@ -193,10 +223,10 @@ dsh plugin --profile web add https://github.com/ckyasb/dsh-dual-review/releases/
 
 ```sh
 npm run check   # 语法检查
-npm test        # 端到端测试，需要 PATH 中有 dsh 0.2.1-rc.5、pnpm 11 和 Node.js ≥ 24.9
+npm test        # 单元测试和端到端测试，需要全局安装的 dsh 0.2.1-rc.5、pnpm 11 和 Node.js ≥ 24.9
 ```
 
-端到端测试会把插件打包装进一个临时的 DSH headless profile，用一个脚本化的 OpenAI 兼容服务扮演 Agent 和两个审查模型，覆盖逐次调用审查的五种情况（两个 allow、两个 deny、意见不一致、一个审查失败、未配置审查模型），以及计划审查与完成度检查的五种情况（批准、检查未通过触发自动续做、检查失败、两轮 revise 后人工兜底、审查失败人工兜底）。GitHub Actions 在每次推送时运行这套测试。
+端到端测试会把插件打包装进一个临时的 DSH headless profile，用一个脚本化的 OpenAI 兼容服务扮演 Agent 和两个审查模型，覆盖逐次调用审查的五种情况（两个 allow、两个 deny、意见不一致、一个审查失败、未配置审查模型），以及计划审查与完成度检查的五种情况（批准、检查未通过触发自动续做、检查失败、两轮 revise 后人工兜底、审查失败人工兜底），再加 `requirePlan` 模式在计划获批前拒绝有风险调用、获批后放行，以及风险闸门 `review` 模式的四种情况。headless 的一次性运行器不接受带预设的会话，所以 `skipPresets`、`reportFallbackPresets` 和 `requirePlan` 的判定由 `test/unit` 里的单元测试覆盖：它们用桩宿主直接驱动插件的钩子，从全局 dsh 安装里加载插件的 peer 依赖。GitHub Actions 在每次推送时运行这两套测试。
 
 发布新版本：修改 `package.json` 的 `version`，提交后推送同名标签（如 `v0.1.1`）。Actions 跑完测试后会打包并创建对应的 Release。
 

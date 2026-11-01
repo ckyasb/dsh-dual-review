@@ -1,0 +1,36 @@
+# Overlay for the plan-gate (requirePlan) scenarios: the same mock provider
+# and direct-mode reviewers as test.plan.cordis.yml, plus the risk gate in
+# requirePlan mode and an "eager" agent model chosen by $AGENT.
+- id: llm-pi-ai
+  config:
+    providers:
+      mock:
+        displayName: Mock agent
+        api: openai-completions
+        baseURL: !!js "'http://127.0.0.1:' + (process.env.MOCK_PORT ?? '18080') + '/v1'"
+        apiKeyEnv: MOCK_API_KEY
+        models:
+          - { id: main-model, name: main }
+          - { id: eager-model, name: eager }
+- id: agent-default-model
+  config:
+    provider: mock
+    model: !!js process.env.AGENT || 'main-model'
+- id: plan-mode
+  config:
+    section: "PLAN_MODE_ACTIVE: investigate read-only, then call exit_plan_mode with your plan."
+- id: dual-review
+  config:
+    defaultForNewSessions: false
+    planReview: { enabled: true, autoPlanMode: true, maxRevisions: 2 }
+    completionCheck: { enabled: true }
+    riskGate: { enabled: true, mode: requirePlan, commands: ['dual-review-ran'], tools: [] }
+    reviewers:
+      - name: R1
+        baseURL: !!js "'http://127.0.0.1:' + (process.env.MOCK_PORT ?? '18080') + '/v1'"
+        apiKeyEnv: MOCK_API_KEY
+        model: !!js process.env.R1 ?? ''
+      - name: R2
+        baseURL: !!js "'http://127.0.0.1:' + (process.env.MOCK_PORT ?? '18080') + '/v1'"
+        apiKeyEnv: MOCK_API_KEY
+        model: !!js process.env.R2 ?? ''

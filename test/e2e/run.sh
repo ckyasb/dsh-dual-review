@@ -86,6 +86,36 @@ plan_scenario plan-revise            ok-model revise-model   no  4 0 0
 # each of the mock's three submissions is reviewed again: 3 x 2 requests.
 plan_scenario plan-review-failed     ok-model planfail-model no  6 0 0
 
+# gate_scenario NAME R1 R2 EXPECT_MARKER EXPECT_PLAN EXPECT_COMPLETION
+# The plan-gate flow with riskGate.mode = requirePlan: an eager agent model
+# first tries the risky shell command in plan mode (refused by the guard,
+# logged as refused), then submits its plan, and only writes the marker after
+# approval. No reviewer request may carry the "risk" kind.
+gate_scenario() {
+  name=$1; expect_marker=$4; expect_plan=$5; expect_completion=$6
+  rm -f "$MARKER"; : >"$MOCK_LOG"
+  echo "please run the shell command" | AGENT=eager-model R1=$2 R2=$3 timeout 120 \
+    dsh --profile headless --patch "$fixtures/test.plan-gate.cordis.yml" --json - >"$work/$name.jsonl" 2>"$work/$name.err"
+  marker=no; [ -f "$MARKER" ] && marker=yes
+  plan=$(grep -c '"kind":"plan"' "$MOCK_LOG")
+  completion=$(grep -c '"kind":"completion"' "$MOCK_LOG")
+  risk=$(grep -c '"kind":"risk"' "$MOCK_LOG")
+  refused=$(grep -c '"refused":1' "$MOCK_LOG")
+  empty=$(grep -E '"kind":"(plan|completion)"' "$MOCK_LOG" | grep -c -v '"currentTurn":[1-9]')
+  if [ "$marker" = "$expect_marker" ] && [ "$plan" = "$expect_plan" ] && [ "$completion" = "$expect_completion" ] \
+     && [ "$refused" = 1 ] && [ "$risk" = 0 ] && [ "$empty" = 0 ]; then
+    echo "ok   $name (ran=$marker plan=$plan completion=$completion refused=$refused risk=$risk)"
+  else
+    echo "FAIL $name: ran=$marker (want $expect_marker) plan=$plan (want $expect_plan) completion=$completion (want $expect_completion) refused=$refused (want 1) risk=$risk (want 0) empty-transcripts=$empty (want 0)"
+    tail -n 5 "$work/$name.err" | sed "s/^/       /"
+    failures=$((failures + 1))
+  fi
+}
+gate_scenario gate-before-plan ok-model ok2-model yes 2 2
+
+# skipPresets and reportFallbackPresets are covered by test/unit: the one-shot
+# headless runner refuses Sessions that run under an agent preset.
+
 # risk_scenario NAME R1 R2 OVERLAY EXPECT_MARKER EXPECT_RISK_REVIEWS
 # The risk-gate flow on non-Auto sessions: counts the risk reviews in the
 # mock log and whether the marker-writing command actually ran.

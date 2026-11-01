@@ -8,7 +8,10 @@
 // replies depend on the model id: allow-model / allow2-model allow,
 // deny-model denies, revise-model asks for plan revisions, incomplete-model
 // reports the task unfinished, and fail-/planfail-/donefail-model return
-// HTTP 500. Every request is logged to $MOCK_LOG.
+// HTTP 500. Every request is logged to $MOCK_LOG. Models whose id contains
+// "eager" try the risky shell command before their first plan submission;
+// once they see the guard's refusal in a tool result (logged as refused) they
+// submit the plan instead.
 import fs from 'node:fs';
 import http from 'node:http';
 
@@ -68,6 +71,32 @@ function replyOnce(res, model, content) {
   }));
 }
 
+// Emit one streamed assistant turn that calls the session's shell tool with
+// the marker-writing command.
+function emitShellCall(res, model, tools) {
+  const names = tools.map((t) => t.function?.name ?? t.name);
+  const shell = ['bash', 'shell', 'exec'].find((n) => names.includes(n)) ?? names.find((n) => /bash|shell|exec/i.test(n));
+  if (!shell) {
+    log({ noShellTool: names });
+    reply(res, model, 'no shell tool');
+    return;
+  }
+  const params = tools.find((t) => (t.function?.name ?? t.name) === shell).function?.parameters ?? {};
+  const args = {};
+  for (const key of params.required ?? []) {
+    const type = params.properties?.[key]?.type;
+    args[key] = type === 'number' || type === 'integer' ? 30000 : 'x';
+  }
+  for (const key of ['command', 'cmd', 'script']) {
+    if (key in (params.properties ?? {})) args[key] = `echo dual-review-ran > ${marker}`;
+  }
+  stream(res, [
+    chunk(model, { role: 'assistant', tool_calls: [{ index: 0, id: `call_${Date.now()}`, type: 'function', function: { name: shell, arguments: JSON.stringify(args) } }] }),
+    chunk(model, {}, 'tool_calls'),
+    usage(model),
+  ]);
+}
+
 http.createServer((req, res) => {
   let body = '';
   req.on('data', (data) => { body += data; });
@@ -114,6 +143,14 @@ http.createServer((req, res) => {
       return;
     }
     if (systemText.includes('PLAN_MODE_ACTIVE') && names.includes('exit_plan_mode')) {
+      const refused = messages.some((m) => m.role === 'tool' && textOf(m).includes('计划获批前不能执行'));
+      if (refused) log({ refused: 1 });
+      // An "eager" model tries the risky shell command before its first plan
+      // submission; the guard must refuse it, and only then does it plan.
+      if (model.includes('eager') && !refused && callOut(messages) === 0) {
+        emitShellCall(res, model, tools);
+        return;
+      }
       if (callOut(messages) >= 3) {
         reply(res, model, 'gave up');
         return;
@@ -135,25 +172,6 @@ http.createServer((req, res) => {
       reply(res, model, 'done');
       return;
     }
-    const shell = ['bash', 'shell', 'exec'].find((n) => names.includes(n)) ?? names.find((n) => /bash|shell|exec/i.test(n));
-    if (!shell) {
-      log({ noShellTool: names });
-      reply(res, model, 'no shell tool');
-      return;
-    }
-    const params = tools.find((t) => (t.function?.name ?? t.name) === shell).function?.parameters ?? {};
-    const args = {};
-    for (const key of params.required ?? []) {
-      const type = params.properties?.[key]?.type;
-      args[key] = type === 'number' || type === 'integer' ? 30000 : 'x';
-    }
-    for (const key of ['command', 'cmd', 'script']) {
-      if (key in (params.properties ?? {})) args[key] = `echo dual-review-ran > ${marker}`;
-    }
-    stream(res, [
-      chunk(model, { role: 'assistant', tool_calls: [{ index: 0, id: `call_${Date.now()}`, type: 'function', function: { name: shell, arguments: JSON.stringify(args) } }] }),
-      chunk(model, {}, 'tool_calls'),
-      usage(model),
-    ]);
+    emitShellCall(res, model, tools);
   });
 }).listen(port, '127.0.0.1');

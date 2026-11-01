@@ -1,7 +1,7 @@
 {
   "name": "dsh-dual-review",
   "description": "Dual-model review for DeepSeek Harness: plan review with gap filling, a completion check, and per-tool Auto authorization",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "main": "lib/index.js",
   "license": "MIT",
@@ -33,7 +33,9 @@
   ],
   "scripts": {
     "check": "node --check lib/index.js",
-    "test": "sh test/e2e/run.sh"
+    "test:unit": "sh test/unit/run.sh",
+    "test:e2e": "sh test/e2e/run.sh",
+    "test": "sh test/unit/run.sh && sh test/e2e/run.sh"
   },
   "dependencies": {
     "@deepseek-ai/dsh-util-values": "0.2.1-rc.5"

@@ -8,9 +8,12 @@
           enabled: false
           autoPlanMode: true
           maxRevisions: 2
+          skipPresets: []
+          reportFallbackPresets: []
         completionCheck:
           enabled: false
         riskGate:
           enabled: false
+          mode: review
           commands: []
           tools: []
