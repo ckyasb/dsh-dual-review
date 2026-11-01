@@ -1,7 +1,7 @@
 {
   "name": "dsh-dual-review",
   "description": "Dual-model review for DeepSeek Harness: plan review with gap filling, a completion check, and per-tool Auto authorization",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "type": "module",
   "main": "lib/index.js",
   "license": "MIT",

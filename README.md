@@ -78,7 +78,7 @@ plan mode 由 DSH 的 `plan-mode` 插件提供，插件用的是根层 `plan-mod
 
 v0.4.0 新增第三种与前面两种互相独立、可同时存在的工作流：**只审查有风险的工具调用**。它为 [dsh-superagent](https://github.com/ckyasb/dsh-superagent) 这类没有 plan mode、用自己的预设（如 `danger-full-access`）直接执行任务的执行器设计：从钉钉群和 GitLab 接任务，既改 argo-cd 仓库，也直接做运维操作（kubectl、ssh、MCP）。要求是：**能影响集群或服务器的调用，先由两个审查模型审查，都通过就自动执行；只读和本地操作不审查。**
 
-v0.5.0 给它加了第二种模式：`riskGate.mode: requirePlan`。这个模式**不调用审查模型**：有风险的调用如果发生在计划获批之前（会话当前处于 plan mode，或有未处理的进入请求）就直接拒绝并提示 agent 先提交计划，计划获批后（或用户自己关了计划模式）则直接放行、不审查。`mode` 缺省或非法时按 `review`（v0.4 行为）。`requirePlan` 推荐与计划审查一起用：这样审查模型每个任务只被调用两次——计划一次、完成度一次，执行中不再逐条审查。会话的预设在 `planReview.skipPresets` 里时，`requirePlan` 守卫也不作用于它。
+v0.5.0 给它加了第二种模式：`riskGate.mode: requirePlan`。这个模式**不调用审查模型**：有风险的调用如果发生在计划获批之前（会话当前处于 plan mode，或有未处理的进入请求）就直接拒绝并提示 agent 先提交计划，计划获批后（或用户自己关了计划模式）则直接放行、不审查。`mode` 缺省或非法时按 `review`（v0.4 行为）。`requirePlan` 推荐与计划审查一起用：这样审查模型每个任务只被调用两次——计划一次、完成度一次，执行中不再逐条审查。会话的预设在 `planReview.skipPresets` 里时，`requirePlan` 守卫也不作用于它。子 Agent 自己不做计划，它的有风险调用按最上层父会话的计划状态判定（父会话还在计划模式就拒绝），所以计划获批前也不能把改动交给子 Agent 去做。
 
 ### 判定规则
 

@@ -15,21 +15,22 @@ const failingReviewers = [
 /**
  * Mount the plugin on a stub host.
  * @param config plugin configuration (reviewers default to two failing ones)
- * @param options.planActive what the plan-mode service reports for every agent
+ * @param options.planActive what the plan-mode service reports: one value, or a function of the agent
  * @param options.projection whether the host has the `agentPreset` Session projection
+ * @param options.agents live agents by Session id, for subagents' parents
  */
-function mount(config, { planActive = true, projection = true } = {}) {
+function mount(config, { planActive = true, projection = true, agents = {} } = {}) {
 	const hooks = new Map();
 	const planSets = [];
 	const planMode = {
-		get: () => ({ active: planActive }),
+		get: (agent) => ({ active: typeof planActive === "function" ? planActive(agent) : planActive }),
 		set: (_agent, active) => {
 			planSets.push(active);
 			return "committed";
 		}
 	};
 	const sessionProjections = { stateOf: (session, key) => key === "agentPreset" ? session.projected ?? null : void 0 };
-	const services = { planMode, ...projection ? { sessionProjections } : {} };
+	const services = { planMode, agents: { get: (id) => agents[id] }, ...projection ? { sessionProjections } : {} };
 	const ctx = {
 		permissionPresets: { registerAuto: () => () => {}, current: () => "workspace-write" },
 		logger: { info() {}, warn() {} },
@@ -167,4 +168,20 @@ test("requirePlan refuses a risky call in plan mode without reviewers", async ()
 test("requirePlan lets a risky call through once plan mode is off, without review", async () => {
 	const { hook } = mount({ planReview, riskGate: gate }, { planActive: false });
 	assert.deepEqual(await hook("tools/pre-execute")(bash(agentOn("worker"), "kubectl -n x delete pod y"), async () => ({ kind: "allow" })), { kind: "allow" });
+});
+
+test("requirePlan judges a subagent's call by its top-level ancestor's plan", async () => {
+	const worker = agentOn("worker"), router = agentOn("router");
+	const child = (parent) => ({ session: { header: { origin: "subagent", parentSession: parent }, projected: "standard" } });
+	const grandchild = { session: { header: { origin: "subagent", parentSession: "c1" }, projected: "standard" } };
+	const agents = { w: worker, r: router, c1: child("w") };
+	const allow = async () => ({ kind: "allow" });
+	const planning = mount({ planReview, riskGate: gate }, { agents, planActive: (agent) => agent === worker });
+	const preExecute = planning.hook("tools/pre-execute");
+	assert.equal((await preExecute(bash(child("w"), "kubectl -n x delete pod y"), allow)).kind, "deny", "worker still planning");
+	assert.equal((await preExecute(bash(grandchild, "kubectl -n x delete pod y"), allow)).kind, "deny", "through two levels");
+	assert.deepEqual(await preExecute(bash(child("r"), "kubectl -n x delete pod y"), allow), { kind: "allow" }, "router is skipped");
+	assert.deepEqual(await preExecute(bash(child("gone"), "kubectl -n x delete pod y"), allow), { kind: "allow" }, "an unloaded parent leaves the subagent's own state");
+	const approved = mount({ planReview, riskGate: gate }, { agents, planActive: false });
+	assert.deepEqual(await approved.hook("tools/pre-execute")(bash(child("w"), "kubectl -n x delete pod y"), allow), { kind: "allow" }, "worker's plan approved");
 });
