@@ -111,8 +111,9 @@ test("a failed review on a report-fallback preset asks the agent to get consent 
 		return { isError: false, value: { approved: false } };
 	};
 	await assert.rejects(hook("tools/execute")({ name: "exit_plan_mode", agent: agentOn("worker"), arguments: { plan: "# P\n" }, signal: new AbortController().signal }, next), (error) => {
-		assert.match(error.message, /双模型计划审查没有通过（R1审查失败：.*；R2审查失败：.*），计划没有获批，仍处于计划模式。/);
+		assert.match(error.message, /双模型计划审查没有通过（R1审查失败：.*；R2审查失败：.*），计划没有获批，仍处于计划模式，/);
 		assert.match(error.message, /请把计划要做的操作和影响告诉请求人/);
+		assert.match(error.message, /主动发起的任务（巡检、Argo CD 同步失败等）：不要等人/);
 		return true;
 	});
 	assert.equal(nexts, 0, "DSH's plan-approval question is not opened");
