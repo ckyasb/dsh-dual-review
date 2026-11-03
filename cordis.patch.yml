@@ -17,5 +17,6 @@
           enabled: false
           mode: review
           rules: []
+          refusePresets: []
           commands: []
           tools: []

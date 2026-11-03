@@ -107,6 +107,8 @@ v0.6.0 把每次调用分成三个安全级别，并给 `requirePlan` 模式补�
 | 🟡 change | 拒绝（`PLAN_REQUIRED`） | 放行，不审查 |
 | 🔴 destructive | 拒绝（`PLAN_REQUIRED`） | 逐次双模型审查，按 `requiredApprovals` 表决 |
 
+`riskGate.refusePresets` 里的预设（例如 dsh-superagent 只负责路由的主 Session `dsh-superagent-router`）只能读：它和它的子 Agent 的 🟡/🔴 调用一律拒绝、不审查，改动要交给执行器。它在 `skipPresets` 之前判断，所以同一个预设可以既跳过计划审查、又不能做改动。
+
 表决也是三票过二：执行模型自己算一票，所以 `requiredApprovals: 1`（需要的审查模型同意票数，缺省 2）时**至少一个**审查模型同意即通过；审查模型调用失败算不同意。有效审查模型数少于 `requiredApprovals` 时直接拒绝，不发起审查。`mode: review` 的两票通过要求同样改为 `requiredApprovals`。
 
 示例（bash 的 kubectl 非只读子命令 → 破坏性；kubernetes 只读 MCP 工具 → 只读；redfish MCP 的写方法 → 破坏性）：
@@ -158,6 +160,7 @@ v0.6.0 把每次调用分成三个安全级别，并给 `requirePlan` 模式补�
       enabled: false            # 风险闸门总开关
       mode: review              # review（逐次审查）或 requirePlan（计划获批前拒绝 🟡🔴，获批后逐次审查 🔴）
       rules: []                 # 有序分类规则，第一条命中的决定 read/change/destructive
+      refusePresets: []         # 这些预设的会话（及其子 Agent）只能读：change/destructive 调用一律拒绝，不审查
       commands: []              # 旧配置：bash command 正则，命中算 change（等价于 class change 的规则）
       tools: []                 # 旧配置：工具名正则，命中算 change
 ```

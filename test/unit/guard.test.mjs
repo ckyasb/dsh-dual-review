@@ -163,3 +163,25 @@ test("a subagent's destructive call is judged and reviewed by its owner session"
 	assert.deepEqual(approved.result, { kind: "allow" });
 	assert.equal(approved.calls.length, 2, "the destructive call is still reviewed after approval");
 });
+
+test("refusePresets refuses change and destructive calls of the preset and its subagents, with no review; reads pass", async () => {
+	const router = { session: { ...session, header: { agentPreset: "router" } } };
+	const config = {
+		reviewers: [reviewer("R1", "allow"), reviewer("R2", "allow")], requiredApprovals: 1,
+		planReview: { enabled: true, skipPresets: ["router"] },
+		riskGate: { ...riskGate, refusePresets: ["router"] }
+	};
+	for (const [agent, label] of [[router, "router"], [childOf("r"), "router's subagent"]]) {
+		for (const command of ["kubectl -n x scale deploy y --replicas=2", "kubectl -n x delete pod y"]) {
+			const { result, calls } = await run(config, { planActive: false, agents: { r: router } }, bash(agent, command));
+			assert.equal(result.kind, "deny", `${label}: ${command}`);
+			assert.equal(result.info.code, "RISK_GATE_DENIED");
+			assert.match(result.reason, /只负责路由/);
+			assert.deepEqual(calls, [], "no review call");
+		}
+	}
+	const read = await run(config, { planActive: false }, bash(router, "kubectl get pods"));
+	assert.deepEqual(read.result, { kind: "allow" });
+	const other = await run(config, { planActive: false }, bash(topAgent, "kubectl -n x scale deploy y --replicas=2"));
+	assert.deepEqual(other.result, { kind: "allow" }, "other presets are not affected");
+});
