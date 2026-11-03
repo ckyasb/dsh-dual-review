@@ -4,6 +4,7 @@
       config:
         reviewers: []
         defaultForNewSessions: false
+        requiredApprovals: 2
         planReview:
           enabled: false
           autoPlanMode: true
@@ -15,5 +16,6 @@
         riskGate:
           enabled: false
           mode: review
+          rules: []
           commands: []
           tools: []

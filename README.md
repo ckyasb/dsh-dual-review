@@ -26,7 +26,7 @@
 v0.3.0 新增一种与逐次调用审查并存的工作流：不再对每一次工具调用把关，而是审查**计划**和**完成度**。
 
 1. **自动进入 plan mode**（`planReview.autoPlanMode`）：每个新的顶层会话（子 Agent 除外）自动进入 plan mode。Agent 先做只读调查，再用 `exit_plan_mode` 提交计划；回合结束后（无论走完还是中断）都会自动回到 plan mode。因此 `/plan off` 只对当前请求生效。
-2. **双模型计划审查**（`planReview.enabled`）：Agent 提交计划时，两个审查模型并行审查，主要任务是**补充计划的漏洞**——遗漏的步骤、验证、备份/回滚、未覆盖的请求部分等。两者都 `approve` 就自动批准并退出 plan mode，不再问人；批准消息会列出所有审查补充项，要求 Agent 执行时一并完成并逐项验证。任一 `revise` 则把阻断问题和补充项回给 Agent，让它继续只读调查并修订计划；最多 `maxRevisions` 轮（0–5，缺省 2），超过后交给人审批。审查调用失败时同样交给人审批，不计轮数。
+2. **双模型计划审查**（`planReview.enabled`）：Agent 提交计划时，两个审查模型并行审查，主要任务是**补充计划的漏洞**——遗漏的步骤、验证、备份/回滚、未覆盖的请求部分等。表决按三票过二：执行模型自己算一票赞成，所以 `requiredApprovals`（需要的审查模型同意票数，1 或 2，缺省 2）为 1 时**一个** `approve` 即自动批准并退出 plan mode，缺省 2 时与旧版相同、需要两个都 `approve`；批准后不再问人，批准消息会写明表决结果，并列出所有审查补充项（包括要求修改一方提出的阻断问题和补充项），要求 Agent 执行时一并完成并逐项验证。同意票不够时：有审查调用失败就交给人审批（不计轮数）；否则把阻断问题和补充项回给 Agent，让它继续只读调查并修订计划，最多 `maxRevisions` 轮（0–5，缺省 2），超过后交给人审批。
 3. **完成度检查**（`completionCheck.enabled`）：执行结束、回合即将关闭时，两个审查模型对照用户请求、批准的计划、审查补充项和当前回合的工具调用与结果，检查任务是否真正完成（只有工具结果证实了的步骤才算完成）。只要有一个人认为未完成，就把遗漏项回给 Agent 并让同一回合**自动续做一次**；这次续做结束后不再检查。
 
 ### 配置
@@ -76,29 +76,73 @@ plan mode 由 DSH 的 `plan-mode` 插件提供，插件用的是根层 `plan-mod
 
 ## 风险闸门
 
-v0.4.0 新增第三种与前面两种互相独立、可同时存在的工作流：**只审查有风险的工具调用**。它为 [dsh-superagent](https://github.com/ckyasb/dsh-superagent) 这类没有 plan mode、用自己的预设（如 `danger-full-access`）直接执行任务的执行器设计：从钉钉群和 GitLab 接任务，既改 argo-cd 仓库，也直接做运维操作（kubectl、ssh、MCP）。要求是：**能影响集群或服务器的调用，先由两个审查模型审查，都通过就自动执行；只读和本地操作不审查。**
+v0.4.0 新增第三种与前面两种互相独立、可同时存在的工作流：**只审查有风险的工具调用**。它为 [dsh-superagent](https://github.com/ckyasb/dsh-superagent) 这类没有 plan mode、用自己的预设（如 `danger-full-access`）直接执行任务的执行器设计：从钉钉群和 GitLab 接任务，既改 argo-cd 仓库，也直接做运维操作（kubectl、ssh、MCP）。要求是：**能影响集群或服务器的调用，先由两个审查模型审查，达到 `requiredApprovals` 票同意就自动执行；只读和本地操作不审查。**
 
-v0.5.0 给它加了第二种模式：`riskGate.mode: requirePlan`。这个模式**不调用审查模型**：有风险的调用如果发生在计划获批之前（会话当前处于 plan mode，或有未处理的进入请求）就直接拒绝并提示 agent 先提交计划，计划获批后（或用户自己关了计划模式）则直接放行、不审查。`mode` 缺省或非法时按 `review`（v0.4 行为）。`requirePlan` 推荐与计划审查一起用：这样审查模型每个任务只被调用两次——计划一次、完成度一次，执行中不再逐条审查。会话的预设在 `planReview.skipPresets` 里时，`requirePlan` 守卫也不作用于它。子 Agent 自己不做计划，它的有风险调用按最上层父会话的计划状态判定（父会话还在计划模式就拒绝），所以计划获批前也不能把改动交给子 Agent 去做。
+v0.5.0 给它加了第二种模式：`riskGate.mode: requirePlan`。这个模式原本不调用审查模型：有风险的调用如果发生在计划获批之前（会话当前处于 plan mode，或有未处理的进入请求）就直接拒绝并提示 agent 先提交计划，计划获批后（或用户自己关了计划模式）则直接放行、不审查。`mode` 缺省或非法时按 `review`（v0.4 行为）。`requirePlan` 推荐与计划审查一起用：这样审查模型每个任务只被调用两次——计划一次、完成度一次，执行中不再逐条审查。会话的预设在 `planReview.skipPresets` 里时，`requirePlan` 守卫也不作用于它。子 Agent 自己不做计划，它的调用按最上层父会话的计划状态判定（父会话还在计划模式就拒绝），所以计划获批前也不能把改动交给子 Agent 去做。
+
+v0.6.0 把每次调用分成三个安全级别，并给 `requirePlan` 模式补上了破坏性调用的逐次审查。
+
+### 工具调用分类
+
+- 🔵 **read（只读）**：不改变任何对象的状态。任何时候都不审查。
+- 🟡 **change（变更）**：会改动对象，但不算破坏性。计划获批后直接执行、不审查；计划获批前被 `requirePlan` 守卫拒绝。
+- 🔴 **destructive（破坏性）**：删除数据、断电/重启/驱逐节点这类不可逆或影响可用性的操作。**每次调用都由两个审查模型审查**，即使计划已经获批。
+
+类别由有序的 `riskGate.rules` 决定，第一条命中的规则决定类别。每一项：
+
+```yaml
+- tool: '^bash$'                # 必填：对工具名测试的正则
+  command: '\bkubectl\b...'     # 可选：对 arguments.command（是字符串时）测试的正则，flags 'm'
+  args: '"replicas":0\b'        # 可选：对 JSON.stringify(arguments ?? {}) 测试的正则
+  class: destructive            # 必填：read | change | destructive
+```
+
+一条规则命中 = `tool` 命中，且（若有）`command` 命中，且（若有）`args` 命中；`command` 存在但 `arguments.command` 不是字符串时该规则不算命中。`tool`、`command`、`args` 都非法（缺字段、class 不合法、正则无效）的项在启动时记 warning 并跳过，不影响插件加载。都不命中时回退到旧的 `commands`（只对 bash）和 `tools` 正则，命中算 🟡 change；仍不命中算 🔵 read。
+
+守卫在各类别、各阶段的行为（`riskGate.mode: requirePlan`）：
+
+| | 计划获批前 | 计划获批后（或不在计划模式） |
+|---|---|---|
+| 🔵 read | 放行 | 放行 |
+| 🟡 change | 拒绝（`PLAN_REQUIRED`） | 放行，不审查 |
+| 🔴 destructive | 拒绝（`PLAN_REQUIRED`） | 逐次双模型审查，按 `requiredApprovals` 表决 |
+
+表决也是三票过二：执行模型自己算一票，所以 `requiredApprovals: 1`（需要的审查模型同意票数，缺省 2）时**至少一个**审查模型同意即通过；审查模型调用失败算不同意。有效审查模型数少于 `requiredApprovals` 时直接拒绝，不发起审查。`mode: review` 的两票通过要求同样改为 `requiredApprovals`。
+
+示例（bash 的 kubectl 非只读子命令 → 破坏性；kubernetes 只读 MCP 工具 → 只读；redfish MCP 的写方法 → 破坏性）：
+
+```yaml
+    requiredApprovals: 1        # 顶层配置，不在 riskGate 里
+    riskGate:
+      enabled: true
+      mode: requirePlan
+      rules:
+        - tool: '^bash$'
+          command: '\bkubectl\s+(delete|apply|edit|patch|replace|scale|rollout|cordon|drain|taint)\b'
+          class: destructive
+        - tool: '^k8s_(get|describe|logs)$'
+          class: read
+        - tool: '^mcp__opkit__redfish$'
+          args: '"method":"(POST|PATCH|PUT|DELETE)"'
+          class: destructive
+```
 
 ### 判定规则
 
-每次工具调用前（子 Agent 会话同样生效），按部署方的正则判定是否有风险：
+每次工具调用前（子 Agent 会话同样生效），先用上面的分类规则判定安全级别，然后按前一节的行为表处理。`riskGate.commands` 和 `riskGate.tools` 是 v0.4 的旧配置，仍然有效，等价于两条 `class: change` 的规则（`commands` 只对 bash 的 `arguments.command` 全文按多行模式 `m` 测试，`tools` 对工具名测试）；在新 `rules` 都不命中时才回退到它们。
 
-- 工具名是 `bash`（shell 类）且 `arguments.command` 全文被 `riskGate.commands` 任一正则匹配（按多行模式 `m` 测试）；或
-- 工具名被 `riskGate.tools` 任一正则匹配。
-
-不匹配的调用直接放行，不产生任何审查请求。三种跳过情形：会话未挂接 Agent、外层 `run_code` 调用、当前会话已在 Auto 预设（那时逐次审查已经负责，避免重复审查）。
+不命中 🟡/🔴 的调用直接放行，不产生任何审查请求。三种跳过情形：会话未挂接 Agent、外层 `run_code` 调用、当前会话已在 Auto 预设（那时逐次审查已经负责，避免重复审查）。
 
 ### 审查与合并规则
 
-判定有风险的调用会构建审查输入（对话与当前回合记录，再加一节 `PENDING_ACTION`，即本次工具名与参数的 JSON，超过 4000 字符截断），用固定的风险审查提示词并行调用两个审查模型。合并：
+判定为 🟡/🔴 的调用会构建审查输入（对话与当前回合记录；🔴 审查在计划获批过时还带上 `APPROVED_PLAN` 和 `REVIEW_ADDITIONS` 两节），再加一节 `PENDING_ACTION`（本次工具名与参数的 JSON，超过 4000 字符截断），用固定的审查提示词并行调用两个审查模型（🔴 用破坏性审查提示词，🟡 在 `mode: review` 下用风险审查提示词）。合并按 `requiredApprovals` 表决：
 
-| 两个审查结果 | 处理 |
+| 同意票（`allow`） | 处理 |
 |---|---|
-| 都 `allow` | 执行 |
-| 任一 `deny`、任一审查调用失败或输出不合协议 | 拦下，不执行（`RISK_GATE_DENIED`），理由中列出两个模型各自的通过 / 拒绝 / 失败情况 |
+| ≥ `requiredApprovals`（执行模型已计 1 票） | 执行 |
+| 不足 | 拦下，不执行（`RISK_GATE_DENIED`），理由中写明需要的票数、得到的票数和各审查模型的通过 / 拒绝 / 失败情况 |
 
-审查是**失败关闭**的：只要不是两个明确的 `allow`，一律不执行。审查期间会话中止则取消这次调用。每次审查记一行 info 日志（工具名和两个模型的 allow / deny / failed），不记录参数和理由。
+审查是**失败关闭**的：审查模型调用失败或输出不合协议都算不同意票。审查期间会话中止则取消这次调用。每次审查记一行 info 日志（工具名和两个模型的 allow / deny / failed 与表决结果），不记录参数和理由。`requiredApprovals` 为 1 或 2 之外的值按 2 并记 warning。
 
 ### 被拒之后 Agent 应该怎么做
 
@@ -109,16 +153,18 @@ v0.5.0 给它加了第二种模式：`riskGate.mode: requirePlan`。这个模式
 ```yaml
 - id: dual-review
   config:
+    requiredApprovals: 2        # 顶层：需要的审查模型同意票数（执行模型已计 1 票）；1 或 2，其它值按 2 并记 warning
     riskGate:
       enabled: false            # 风险闸门总开关
-      mode: review              # review（逐次双模型审查）或 requirePlan（计划获批前直接拒绝，不调审查模型）
-      commands: []              # 正则字符串数组：对 bash 的 command 全文测试（flags 'm'）
-      tools: []                 # 正则字符串数组：对工具名测试
+      mode: review              # review（逐次审查）或 requirePlan（计划获批前拒绝 🟡🔴，获批后逐次审查 🔴）
+      rules: []                 # 有序分类规则，第一条命中的决定 read/change/destructive
+      commands: []              # 旧配置：bash command 正则，命中算 change（等价于 class change 的规则）
+      tools: []                 # 旧配置：工具名正则，命中算 change
 ```
 
-`mode: review` 与另两种模式一样要求恰好有两个有效 reviewer，不满足时记一条 warning 并不启用；`mode: requirePlan` 不调用审查模型，所以没有这个要求。无效正则在启动时记 warning 并忽略该条，不影响插件加载。正则是**部署方的策略**，请按自己的集群和服务器实际情况调整。
+`mode: review` 要求恰好有两个有效 reviewer，不满足时记一条 warning 并不启用。`mode: requirePlan` 对 🟡 change 不调用审查模型；对 🔴 destructive 则需要 `requiredApprovals` 个有效审查模型，不足时不发起审查、破坏性调用直接拒绝（审查模型一个都没配时也是这样）。无效正则在启动时记 warning 并忽略该条，不影响插件加载。正则是**部署方的策略**，请按自己的集群和服务器实际情况调整。
 
-示例配置（kubectl 非只读子命令、helm 变更类子命令、ssh / scp / rsync、带写方法的 curl，以及 kubernetes MCP 的写操作）：
+示例配置（旧的 `commands`/`tools` 写法，等价于 `class: change` 的规则：kubectl 非只读子命令、helm 变更类子命令、ssh / scp / rsync、带写方法的 curl，以及 kubernetes MCP 的写操作）：
 
 ```yaml
     riskGate:
@@ -145,13 +191,19 @@ dsh-superagent 的路由主 Session 用预设 `dsh-superagent-router`（只路�
       reportFallbackPresets: [dsh-superagent-worker]
     completionCheck:
       enabled: true
+    requiredApprovals: 1
     riskGate:
       enabled: true
       mode: requirePlan
-      commands:
-        - '^kubectl\s+(apply|create|delete|edit|patch|replace|scale|rollout|cordon|drain|taint|label|annotate|set)\b'
+      rules:
+        - tool: '^bash$'
+          command: '\bkubectl\s+(apply|create|delete|edit|patch|replace|scale|rollout|cordon|drain|taint|label|annotate|set)\b'
+          class: destructive
+      commands: []
       tools: []
 ```
+
+`requiredApprovals: 1` 让执行器在计划获批后做破坏性操作时只需要一个审查模型同意（执行模型自己已算一票）；想要更保守就保持缺省的 2。
 
 ## 兼容性
 
@@ -186,6 +238,7 @@ dsh plugin --profile web add https://github.com/ckyasb/dsh-dual-review/releases/
    | 字段 | 说明 |
    |---|---|
    | `reviewers` | 取前两个有效条目（直连与路由模式可以混用）；`name` 可省略（缺省 `reviewer-1` / `reviewer-2`）；`temperature` 缺省 0，设为 `null` 时请求不带 temperature |
+   | `requiredApprovals` | 需要的审查模型同意票数，1 或 2（缺省 2），用于计划审查、`mode: review` 和 🔴 破坏性调用审查；其它值按 2 并记 warning |
    | `baseURL` | 直连模式的 OpenAI 兼容接口地址；非空时该条按直连模式处理 |
    | `apiKeyEnv` | 存放 API key 的环境变量名（直连模式必填） |
    | `model` / `timeoutMs` | 直连模式的模型 id（必填）与请求超时毫秒数（缺省 120000） |
@@ -226,7 +279,7 @@ npm run check   # 语法检查
 npm test        # 单元测试和端到端测试，需要全局安装的 dsh 0.2.1-rc.5、pnpm 11 和 Node.js ≥ 24.9
 ```
 
-端到端测试会把插件打包装进一个临时的 DSH headless profile，用一个脚本化的 OpenAI 兼容服务扮演 Agent 和两个审查模型，覆盖逐次调用审查的五种情况（两个 allow、两个 deny、意见不一致、一个审查失败、未配置审查模型），以及计划审查与完成度检查的五种情况（批准、检查未通过触发自动续做、检查失败、两轮 revise 后人工兜底、审查失败人工兜底），再加 `requirePlan` 模式在计划获批前拒绝有风险调用、获批后放行，以及风险闸门 `review` 模式的四种情况。headless 的一次性运行器不接受带预设的会话，所以 `skipPresets`、`reportFallbackPresets` 和 `requirePlan` 的判定由 `test/unit` 里的单元测试覆盖：它们用桩宿主直接驱动插件的钩子，从全局 dsh 安装里加载插件的 peer 依赖。GitHub Actions 在每次推送时运行这两套测试。
+端到端测试会把插件打包装进一个临时的 DSH headless profile，用一个脚本化的 OpenAI 兼容服务扮演 Agent 和两个审查模型，覆盖逐次调用审查的五种情况（两个 allow、两个 deny、意见不一致、一个审查失败、未配置审查模型），以及计划审查与完成度检查的五种情况（批准、检查未通过触发自动续做、检查失败、两轮 revise 后人工兜底、审查失败人工兜底），再加 `requirePlan` 模式在计划获批前拒绝有风险调用、获批后放行，以及风险闸门 `review` 模式的四种情况。headless 的一次性运行器不接受带预设的会话，所以 `skipPresets`、`reportFallbackPresets`、`requirePlan` 的判定、工具调用的分类（`classifyCall`）、🔴 破坏性调用的逐次审查表决和计划审查的 `requiredApprovals` 表决由 `test/unit` 里的单元测试覆盖：它们用桩宿主直接驱动插件的钩子，用替换 `globalThis.fetch` 的桩扮演审查模型，并从全局 dsh 安装里加载插件的 peer 依赖。GitHub Actions 在每次推送时运行这两套测试。
 
 发布新版本：修改 `package.json` 的 `version`，提交后推送同名标签（如 `v0.1.1`）。Actions 跑完测试后会打包并创建对应的 Release。
 
